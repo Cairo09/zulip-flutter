@@ -1051,7 +1051,7 @@ class UserTopicEvent extends Event {
   final int streamId;
   final TopicName topicName;
   final int lastUpdated;
-  final UserTopicVisibilityPolicy visibilityPolicy;
+  final UserTopicVisibilityPolicy? visibilityPolicy;
 
   UserTopicEvent({
     required super.id,

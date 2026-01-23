@@ -19,6 +19,7 @@ mixin ChannelStore on UserStore {
   @protected
   UserStore get userStore;
 
+
   /// All known channels/streams, indexed by [ZulipStream.streamId].
   ///
   /// The same [ZulipStream] objects also appear in [streamsByName].
@@ -44,6 +45,16 @@ mixin ChannelStore on UserStore {
 
   /// All the channel folders, including archived ones, indexed by ID.
   Map<int, ChannelFolder> get channelFolders;
+
+  static bool _warnInvalidVisibilityPolicy(
+      UserTopicVisibilityPolicy? visibilityPolicy
+      ) {
+    if (visibilityPolicy == null) {
+      // Not a value we expect. Keep it out of our data structures. // TODO(log)
+      return true;
+    }
+    return false;
+  }
 
   static int compareChannelsByName(ZulipStream a, ZulipStream b) {
     // A user gave feedback wanting zulip-flutter to match web in putting
@@ -118,10 +129,21 @@ mixin ChannelStore on UserStore {
   UserTopicVisibilityEffect willChangeIfTopicVisibleInStream(UserTopicEvent event) {
     final streamId = event.streamId;
     final topic = event.topicName;
+
+    final UserTopicVisibilityPolicy? visibilityPolicy = event.visibilityPolicy;
+    if (ChannelStore._warnInvalidVisibilityPolicy(visibilityPolicy)) {
+      return UserTopicVisibilityEffect.none;
+    }
+
+    final UserTopicVisibilityPolicy policy = visibilityPolicy!;
+
     return UserTopicVisibilityEffect._fromBeforeAfter(
       _isTopicVisibleInStream(topicVisibilityPolicy(streamId, topic)),
-      _isTopicVisibleInStream(event.visibilityPolicy));
+      _isTopicVisibleInStream(policy),
+    );
   }
+
+
 
   static bool _isTopicVisibleInStream(UserTopicVisibilityPolicy policy) {
     switch (policy) {
@@ -131,9 +153,6 @@ mixin ChannelStore on UserStore {
         return false;
       case UserTopicVisibilityPolicy.unmuted:
       case UserTopicVisibilityPolicy.followed:
-        return true;
-      case UserTopicVisibilityPolicy.unknown:
-        assert(false);
         return true;
     }
   }
@@ -155,10 +174,22 @@ mixin ChannelStore on UserStore {
   UserTopicVisibilityEffect willChangeIfTopicVisible(UserTopicEvent event) {
     final streamId = event.streamId;
     final topic = event.topicName;
+
+    final UserTopicVisibilityPolicy? visibilityPolicy = event.visibilityPolicy;
+    if (ChannelStore._warnInvalidVisibilityPolicy(visibilityPolicy)) {
+      return UserTopicVisibilityEffect.none;
+    }
+
+    final UserTopicVisibilityPolicy policy = visibilityPolicy!;
+
     return UserTopicVisibilityEffect._fromBeforeAfter(
       _isTopicVisible(streamId, topicVisibilityPolicy(streamId, topic)),
-      _isTopicVisible(streamId, event.visibilityPolicy));
+      _isTopicVisible(streamId, policy),
+    );
   }
+
+
+
 
   bool _isTopicVisible(int streamId, UserTopicVisibilityPolicy policy) {
     switch (policy) {
@@ -172,9 +203,6 @@ mixin ChannelStore on UserStore {
         return false;
       case UserTopicVisibilityPolicy.unmuted:
       case UserTopicVisibilityPolicy.followed:
-        return true;
-      case UserTopicVisibilityPolicy.unknown:
-        assert(false);
         return true;
     }
   }
@@ -320,25 +348,31 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
     required InitialSnapshot initialSnapshot,
   }) {
     final subscriptions = Map.fromEntries(initialSnapshot.subscriptions.map(
-      (subscription) => MapEntry(subscription.streamId, subscription)));
+            (subscription) => MapEntry(subscription.streamId, subscription)));
 
     final streams = Map<int, ZulipStream>.of(subscriptions);
     for (final stream in initialSnapshot.streams) {
       streams.putIfAbsent(stream.streamId, () => stream);
     }
 
-    final channelFolders = Map.fromEntries((initialSnapshot.channelFolders ?? [])
-      .map((channelFolder) => MapEntry(channelFolder.id, channelFolder)));
+    final channelFolders = Map.fromEntries(
+        (initialSnapshot.channelFolders ?? [])
+            .map((channelFolder) => MapEntry(channelFolder.id, channelFolder)));
 
     final topicVisibility = <int, TopicKeyedMap<UserTopicVisibilityPolicy>>{};
     for (final item in initialSnapshot.userTopics) {
-      if (_warnInvalidVisibilityPolicy(item.visibilityPolicy)) {
-        // Not a value we expect. Keep it out of our data structures. // TODO(log)
+      final UserTopicVisibilityPolicy? visibilityPolicy = item.visibilityPolicy;
+      if (ChannelStore._warnInvalidVisibilityPolicy(visibilityPolicy)) {
         continue;
       }
-      final forStream = topicVisibility.putIfAbsent(item.streamId, () => makeTopicKeyedMap());
-      forStream[item.topicName] = item.visibilityPolicy;
+
+      final UserTopicVisibilityPolicy policy = visibilityPolicy!;
+
+      final forStream =
+      topicVisibility.putIfAbsent(item.streamId, () => makeTopicKeyedMap());
+      forStream[item.topicName] = policy;
     }
+
 
     return ChannelStoreImpl._(
       users: users,
@@ -369,33 +403,30 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
   final Map<int, ChannelFolder> channelFolders;
 
   @override
-  Map<int, TopicKeyedMap<UserTopicVisibilityPolicy>> get debugTopicVisibility => topicVisibility;
+  Map<int, TopicKeyedMap<UserTopicVisibilityPolicy>> get debugTopicVisibility =>
+      topicVisibility;
 
   final Map<int, TopicKeyedMap<UserTopicVisibilityPolicy>> topicVisibility;
 
   @override
-  UserTopicVisibilityPolicy topicVisibilityPolicy(int streamId, TopicName topic) {
+  UserTopicVisibilityPolicy topicVisibilityPolicy(int streamId,
+      TopicName topic) {
     return topicVisibility[streamId]?[topic] ?? UserTopicVisibilityPolicy.none;
   }
 
-  static bool _warnInvalidVisibilityPolicy(UserTopicVisibilityPolicy visibilityPolicy) {
-    if (visibilityPolicy == UserTopicVisibilityPolicy.unknown) {
-      // Not a value we expect. Keep it out of our data structures. // TODO(log)
-      return true;
-    }
-    return false;
-  }
 
   void handleChannelEvent(ChannelEvent event) {
     switch (event) {
       case ChannelCreateEvent():
         assert(event.streams.every((stream) =>
-          !streams.containsKey(stream.streamId)
-          && !streamsByName.containsKey(stream.name)));
-        streams.addEntries(event.streams.map((stream) => MapEntry(stream.streamId, stream)));
-        streamsByName.addEntries(event.streams.map((stream) => MapEntry(stream.name, stream)));
-        // (Don't touch `subscriptions`. If the user is subscribed to the stream,
-        // details will come in a later `subscription` event.)
+        !streams.containsKey(stream.streamId)
+            && !streamsByName.containsKey(stream.name)));
+        streams.addEntries(
+            event.streams.map((stream) => MapEntry(stream.streamId, stream)));
+        streamsByName.addEntries(
+            event.streams.map((stream) => MapEntry(stream.name, stream)));
+    // (Don't touch `subscriptions`. If the user is subscribed to the stream,
+    // details will come in a later `subscription` event.)
 
       case ChannelDeleteEvent():
         for (final channelId in event.channelIds) {
@@ -404,7 +435,7 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
           assert(channelId == channel.streamId);
           assert(identical(channel, streamsByName[channel.name]));
           assert(subscriptions[channelId] == null
-            || identical(subscriptions[channelId], channel));
+              || identical(subscriptions[channelId], channel));
           streamsByName.remove(channel.name);
           subscriptions.remove(channelId);
         }
@@ -432,7 +463,8 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
           case ChannelPropertyName.name:
             final streamName = stream.name;
             assert(streamName == event.name);
-            assert(identical(streams[stream.streamId], streamsByName[streamName]));
+            assert(identical(
+                streams[stream.streamId], streamsByName[streamName]));
             stream.name = event.value as String;
             streamsByName.remove(streamName);
             streamsByName[stream.name] = stream;
@@ -503,30 +535,30 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
         assert(identical(streamsByName[subscription.name], subscription));
         switch (event.property) {
           case SubscriptionProperty.color:
-            subscription.color                  = event.value as int;
+            subscription.color = event.value as int;
           case SubscriptionProperty.isMuted:
-            // TODO(#1255) update [MessageListView] if affected
-            subscription.isMuted                = event.value as bool;
+          // TODO(#1255) update [MessageListView] if affected
+            subscription.isMuted = event.value as bool;
           case SubscriptionProperty.pinToTop:
-            subscription.pinToTop               = event.value as bool;
+            subscription.pinToTop = event.value as bool;
           case SubscriptionProperty.desktopNotifications:
-            subscription.desktopNotifications   = event.value as bool;
+            subscription.desktopNotifications = event.value as bool;
           case SubscriptionProperty.audibleNotifications:
-            subscription.audibleNotifications   = event.value as bool;
+            subscription.audibleNotifications = event.value as bool;
           case SubscriptionProperty.pushNotifications:
-            subscription.pushNotifications      = event.value as bool;
+            subscription.pushNotifications = event.value as bool;
           case SubscriptionProperty.emailNotifications:
-            subscription.emailNotifications     = event.value as bool;
+            subscription.emailNotifications = event.value as bool;
           case SubscriptionProperty.wildcardMentionsNotify:
             subscription.wildcardMentionsNotify = event.value as bool;
           case SubscriptionProperty.unknown:
-            // unrecognized property; do nothing
+          // unrecognized property; do nothing
             return;
         }
 
       case SubscriptionPeerAddEvent():
       case SubscriptionPeerRemoveEvent():
-        // We don't currently store the data these would update; that's #374.
+      // We don't currently store the data these would update; that's #374.
     }
   }
 
@@ -541,10 +573,13 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
         final channelFolder = channelFolders[event.channelFolderId];
         if (channelFolder == null) return; // TODO(log)
 
-        if (change.name != null)                channelFolder.name = change.name!;
-        if (change.description != null)         channelFolder.description = change.description!;
-        if (change.renderedDescription != null) channelFolder.renderedDescription = change.renderedDescription!;
-        if (change.isArchived != null)          channelFolder.isArchived = change.isArchived!;
+        if (change.name != null) channelFolder.name = change.name!;
+        if (change.description != null)
+          channelFolder.description = change.description!;
+        if (change.renderedDescription != null)
+          channelFolder.renderedDescription = change.renderedDescription!;
+        if (change.isArchived != null)
+          channelFolder.isArchived = change.isArchived!;
 
       case ChannelFolderReorderEvent():
         final order = event.order;
@@ -558,13 +593,20 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
   }
 
   void handleUserTopicEvent(UserTopicEvent event) {
-    UserTopicVisibilityPolicy visibilityPolicy = event.visibilityPolicy;
-    if (_warnInvalidVisibilityPolicy(visibilityPolicy)) {
-      visibilityPolicy = UserTopicVisibilityPolicy.none;
+    final UserTopicVisibilityPolicy? visibilityPolicy = event.visibilityPolicy;
+    if (ChannelStore._warnInvalidVisibilityPolicy(visibilityPolicy)) {
+      final forStream = topicVisibility[event.streamId];
+      if (forStream == null) return;
+      forStream.remove(event.topicName);
+      if (forStream.isEmpty) {
+        topicVisibility.remove(event.streamId);
+      }
+      return;
     }
-    if (visibilityPolicy == UserTopicVisibilityPolicy.none) {
-      // This is the "zero value" for this type, which our data structure
-      // represents by leaving the topic out entirely.
+
+    final UserTopicVisibilityPolicy policy = visibilityPolicy!;
+
+    if (policy == UserTopicVisibilityPolicy.none) {
       final forStream = topicVisibility[event.streamId];
       if (forStream == null) return;
       forStream.remove(event.topicName);
@@ -572,13 +614,14 @@ class ChannelStoreImpl extends HasUserStore with ChannelStore {
         topicVisibility.remove(event.streamId);
       }
     } else {
-      final forStream = topicVisibility.putIfAbsent(event.streamId, () => makeTopicKeyedMap());
-      forStream[event.topicName] = visibilityPolicy;
+      final forStream =
+      topicVisibility.putIfAbsent(event.streamId, () => makeTopicKeyedMap());
+      forStream[event.topicName] = policy;
     }
   }
 }
 
-/// A [Map] with [TopicName] keys and [V] values.
+  /// A [Map] with [TopicName] keys and [V] values.
 ///
 /// When one of these is created by [makeTopicKeyedMap],
 /// key equality is done case-insensitively; see there.

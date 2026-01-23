@@ -443,7 +443,7 @@ void main() {
         userTopics: [
           eg.userTopicItem(stream1, 'topic 1', UserTopicVisibilityPolicy.muted),
           eg.userTopicItem(stream1, 'topic 2', UserTopicVisibilityPolicy.unmuted),
-          eg.userTopicItem(stream2, 'topic 3', UserTopicVisibilityPolicy.unknown),
+          eg.userTopicItem(stream2, 'topic 3', null),
           eg.userTopicItem(stream2, 'topic 4', UserTopicVisibilityPolicy.followed),
         ]));
       check(store.debugTopicVisibility).deepEquals({
@@ -515,7 +515,8 @@ void main() {
         final store = eg.store();
         await store.setUserTopic(stream1, 'topic', UserTopicVisibilityPolicy.muted);
         // case-insensitivity
-        await store.setUserTopic(stream1, 'ToPiC', UserTopicVisibilityPolicy.unknown);
+        await store.setUserTopic(stream1, 'ToPiC', null);
+
         compareTopicVisibility(store, [
         ]);
       });
